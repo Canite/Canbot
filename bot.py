@@ -7,11 +7,63 @@ import signal
 import sys
 import os
 import random
+import cv2 as cv
+import numpy as np
+import multiprocessing as mp
+import queue
 
 CHAT_MSG = re.compile(r"^:\w+!\w+@\w+\.tmi\.twitch\.tv PRIVMSG #\w+ :")
 filenames = []
 quotes = []
 new_quotes = []
+
+class EggDupeCounter(mp.Process):
+    def __init__(self, video_id, sock):
+        mp.Process.__init__(self)
+        self.video_id = video_id
+        self.sock = sock
+        self.egg_bottle = self.normalize(np.load(config.EGG_BOTTLE))
+        self.empty_bottle = self.normalize(np.load(config.EMPTY_BOTTLE))
+        self.empty = True
+        self.count = 0
+
+    def normalize(self, arr):
+        rng = arr.max()-arr.min()
+        amin = arr.min()
+        return (arr-amin)*255/rng
+
+    def setup_video_capture(self):
+        self.vc = cv.VideoCapture(self.video_id)
+        if (not self.vc):
+            print("Error loading video capture")
+            return 1
+        else:
+            print("Loaded video capture")
+            return 0
+
+    def run(self):
+        self.setup_video_capture()
+        while True:
+            ret, frame = self.vc.read()
+            ret, frame = self.vc.read()
+            if (not ret):
+                break
+            y1,y2,x1,x2 = config.C_RIGHT_COORDS
+            c_right = self.normalize(frame[y1:y2, x1:x2])
+            if (self.empty):
+                diff = np.linalg.norm(self.egg_bottle - c_right)
+                if (diff < 5):
+                    #print("Egg: {}".format(diff))
+                    self.empty = False
+                    self.count += 1
+                    chat(self.sock, "Egg count: {}".format(self.count))
+                    self.count = self.count % 7
+            else:
+                diff = np.linalg.norm(self.empty_bottle - c_right)
+                if (diff < 5):
+                    #print("Empty: {}".format(diff))
+                    self.empty = True
+        return
 
 def signal_handler(signal, frame):
     with open(config.QUOTES_FILE, 'a+') as qf:
@@ -94,6 +146,9 @@ def main():
     s.send("PASS {}\r\n".format(config.PASS).encode("utf-8"))
     s.send("NICK {}\r\n".format(config.NICK).encode("utf-8"))
     s.send("JOIN {}\r\n".format(config.CHAN).encode("utf-8"))
+
+    counter = EggDupeCounter(config.VIDEO_ID, s)
+    counter.start()
 
     while True:
         response = s.recv(4096).decode("utf-8")
