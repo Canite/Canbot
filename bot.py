@@ -1,168 +1,95 @@
 #!/usr/bin/env python3
 import config
-import socket
-import time
-import re
+import egg_dupe_counter as edc
+import irc.bot
+import requests
 import signal
 import sys
 import os
 import random
-import cv2 as cv
-import numpy as np
-import multiprocessing as mp
-import queue
+import datetime
+import urllib
 
-CHAT_MSG = re.compile(r"^:\w+!\w+@\w+\.tmi\.twitch\.tv PRIVMSG #\w+ :")
-filenames = []
-quotes = []
-new_quotes = []
+class TwitchBot(irc.bot.SingleServerIRCBot):
+    def __init__(self, username, client_id, token, channel):
+        self.client_id = client_id
+        self.token = token
+        self.channel = "#" + channel
+        signal.signal(signal.SIGINT, self.handle_exit_signal)
+        self.exit = False
 
-class EggDupeCounter(mp.Process):
-    def __init__(self, video_id, sock):
-        mp.Process.__init__(self)
-        self.video_id = video_id
-        self.sock = sock
-        self.egg_bottle = self.normalize(np.load(config.EGG_BOTTLE))
-        self.empty_bottle = self.normalize(np.load(config.EMPTY_BOTTLE))
-        self.empty = True
-        self.count = 0
+        # Get the channel id, we will need this for v5 API calls
+        url = 'https://api.twitch.tv/kraken/users?login=' + channel
+        headers = {'Client-ID': client_id, 'Accept': 'application/vnd.twitchtv.v5+json'}
+        r = requests.get(url, headers=headers).json()
+        self.channel_id = r['users'][0]['_id']
 
-    def normalize(self, arr):
-        rng = arr.max()-arr.min()
-        amin = arr.min()
-        return (arr-amin)*255/rng
+        # Create IRC bot connection
+        server = 'irc.chat.twitch.tv'
+        port = 6667
+        print('Connecting to ' + server + ' on port ' + str(port) + '...')
+        irc.bot.SingleServerIRCBot.__init__(self, [(server, port, token)], username, username)
 
-    def setup_video_capture(self):
-        self.vc = cv.VideoCapture(self.video_id)
-        if (not self.vc):
-            print("Error loading video capture")
-            return 1
-        else:
-            print("Loaded video capture")
-            return 0
+        self.counter = edc.EggDupeCounter(config.VIDEO_ID, self, config.EGG_BOTTLE, config.EMPTY_BOTTLE, config.C_RIGHT_COORDS)
+        self.counter.start()
 
-    def run(self):
-        self.setup_video_capture()
-        while True:
-            ret, frame = self.vc.read()
-            ret, frame = self.vc.read()
-            if (not ret):
-                break
-            y1,y2,x1,x2 = config.C_RIGHT_COORDS
-            c_right = self.normalize(frame[y1:y2, x1:x2])
-            if (self.empty):
-                diff = np.linalg.norm(self.egg_bottle - c_right)
-                if (diff < 5):
-                    #print("Egg: {}".format(diff))
-                    self.empty = False
-                    self.count += 1
-                    chat(self.sock, "Egg count: {}".format(self.count))
-                    self.count = self.count % 7
-            else:
-                diff = np.linalg.norm(self.empty_bottle - c_right)
-                if (diff < 5):
-                    #print("Empty: {}".format(diff))
-                    self.empty = True
+
+    def on_welcome(self, c, e):
+        print('Joining ' + self.channel)
+
+        # You must request specific capabilities before you can use them
+        c.cap('REQ', ':twitch.tv/membership')
+        c.cap('REQ', ':twitch.tv/tags')
+        c.cap('REQ', ':twitch.tv/commands')
+        c.join(self.channel)
+
+    def on_pubmsg(self, c, e):
+        msg = e.arguments[0]
+        # If a chat message starts with an exclamation point, try to run it as a command
+        if msg[0] == '!':
+            cmd = msg.split(' ')[0][1:]
+            print("Received command: " + cmd)
+            self.do_command(e, cmd, ' '.join(msg.split(' ')[1:]))
         return
 
-def signal_handler(signal, frame):
-    with open(config.QUOTES_FILE, 'a+') as qf:
-        for quote in new_quotes:
-            qf.write("{}\n".format(quote))
-    sys.exit(0)
+    def do_command(self, e, cmd, msg):
+        if (cmd == "game"):
+            channel_url = "https://api.twitch.tv/kraken/channels/" + self.channel_id
+            headers = {'Client-ID': self.client_id, 'Accept': 'application/vnd.twitchtv.v5+json'}
 
-def chat(sock, msg):
-    print(msg)
-    sock.sendall("PRIVMSG {} :{}\r\n".format(config.CHAN, msg).encode("utf-8"))
+            r = requests.get(channel_url, headers=headers).json()
+            self.chat("The current game is {}".format(r["game"]))
+        elif (cmd == "wr"):
+            channel_url = "https://api.twitch.tv/kraken/channels/" + self.channel_id
+            headers = {'Client-ID': self.client_id, 'Accept': 'application/vnd.twitchtv.v5+json'}
 
-def ban(sock, user):
-    chat(sock, ".ban {}".format(user))
+            r = requests.get(channel_url, headers=headers).json()
+            game_name = r["game"]
+            game_url = urllib.parse.quote(game_name)
+            speedrun_url = "https://www.speedrun.com/api/v1/games?name={}".format(game_url)
+            r = requests.get(speedrun_url).json()
+            game_id = r["data"][0]["id"]
+            speedrun_url = "https://www.speedrun.com/api/v1/games/{}/records?top=1".format(game_id)
+            r = requests.get(speedrun_url).json()
+            first_place = str(datetime.timedelta(seconds=r["data"][0]["runs"][0]["run"]["times"]["primary_t"]))
+            user_url = user = r["data"][0]["runs"][0]["run"]["players"][0]["uri"]
+            r = requests.get(user_url).json()
+            user_name = r["data"]["names"]["international"]
+            self.chat("The \"{}\" world record is {} by {}.".format(game_name, first_place, user_name))
 
-def timeout(sock, user, secs=600):
-    chat(sock, ".timeout {}".format(user, secs))
+    def chat(self, msg):
+        self.connection.privmsg(self.channel, msg)
 
-def get_filename(sock, username, msg):
-    if (username == "canight"):
-        if (filenames):
-            new_filename = filenames.pop()
-            chat(sock, "New filename: {}".format(new_filename))
-        else:
-            chat(sock, "No filename suggestions, type !filename <filename> to suggest a filename!")
-
-def add_filename(sock, username, msg):
-    split_msg = msg.split(" ")
-    if (len(split_msg) > 1):
-        filename = " ".join(split_msg[1:])
-        if (len(filename) <= 8):
-            filenames.insert(0, filename)
-            chat(sock, "@{} Added \"{}\" to the list of filenames!".format(username, filename))
-        else:
-            chat(sock, "@{} Filename is too long, it must be 8 or less characters!".format(username))
-
-def list_commands(sock, username, msg):
-    chat(sock, "Commands: {}".format(",".join(config.COMMANDS.keys())))
-
-def add_quote(sock, username, msg):
-    msg = msg.lstrip("!newquote").lstrip(" ")
-    if (msg != ""):
-        quotes.append(msg)
-        new_quotes.append(msg)
-        chat(sock, "Added a quote!")
-    else:
-        chat(sock, "No quote given")
-    return
-
-def random_quote(sock, username, msg):
-    rand_quote = random.randrange(len(quotes))
-    quote(sock, username, str(rand_quote))
-    return
-
-def quote(sock, username, msg):
-    msg = msg.lstrip("!quote").lstrip(" ")
-    try:
-        q = int(msg)
-        if (0 <= q <= len(quotes)):
-            chat(sock, quotes[q])
-        else:
-            chat(sock, "Must choose a quote number from 0 to {}!".format(str(len(quotes))))
-    except ValueError:
-        chat(sock, "Must choose a quote number from 0 to {}!".format(str(len(quotes))))
-    return
+    def handle_exit_signal(self, signal, frame):
+        print("Goodbye, cruel world...")
+        self.counter.exit = True
+        self.die()
 
 def main():
-    global quotes
-    signal.signal(signal.SIGINT, signal_handler)
-
-    COMMANDS = {"!filename" : add_filename, "!newfile" : get_filename, "!commands" : list_commands, \
-                "!newquote" : add_quote, "!random" : random_quote, "!quote" : quote}
-
     random.seed()
 
-    if (os.path.exists(config.QUOTES_FILE)):
-        quotes = open(config.QUOTES_FILE, 'r').readlines()
-
-    s = socket.socket()
-    s.connect((config.HOST, config.PORT))
-    s.send("PASS {}\r\n".format(config.PASS).encode("utf-8"))
-    s.send("NICK {}\r\n".format(config.NICK).encode("utf-8"))
-    s.send("JOIN {}\r\n".format(config.CHAN).encode("utf-8"))
-
-    counter = EggDupeCounter(config.VIDEO_ID, s)
-    counter.start()
-
-    while True:
-        response = s.recv(4096).decode("utf-8")
-        if (response == "PING :tmi.twitch.tv\r\n"):
-            s.send("PONG :tmi.twitch.tv\r\n".encode("utf-8"))
-        else:
-            username = re.search(r"\w+", response).group(0)
-            message = CHAT_MSG.sub("", response).rstrip("\r\n")
-            split_message = message.split()
-            print(username + ": " + message)
-            if (split_message[0] in COMMANDS):
-                COMMANDS[split_message[0]](s, username, message)
-
-        time.sleep(config.RATE)
+    bot = TwitchBot(config.USERNAME, config.CLIENT_ID, config.TOKEN, config.CHANNEL)
+    bot.start()
 
 if __name__ == "__main__":
     main()
