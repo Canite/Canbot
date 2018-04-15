@@ -30,10 +30,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         print('Connecting to ' + server + ' on port ' + str(port) + '...')
         irc.bot.SingleServerIRCBot.__init__(self, [(server, port, token)], username, username)
 
-        self.counter = edc.EggDupeCounter(config.VIDEO_ID, self, config.EGG_BOTTLE, config.EMPTY_BOTTLE, config.C_RIGHT_COORDS)
-        self.counter.start()
-
-
     def on_welcome(self, c, e):
         print('Joining ' + self.channel)
 
@@ -42,6 +38,9 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         c.cap('REQ', ':twitch.tv/tags')
         c.cap('REQ', ':twitch.tv/commands')
         c.join(self.channel)
+
+        self.counter = edc.EggDupeCounter(c.socket, self.channel, config.EGG_BOTTLE, config.EMPTY_BOTTLE, config.C_RIGHT_COORDS)
+        self.counter.start()
 
     def on_pubmsg(self, c, e):
         msg = e.arguments[0]
@@ -59,23 +58,60 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
             r = requests.get(channel_url, headers=headers).json()
             self.chat("The current game is {}".format(r["game"]))
+
         elif (cmd == "wr"):
             channel_url = "https://api.twitch.tv/kraken/channels/" + self.channel_id
             headers = {'Client-ID': self.client_id, 'Accept': 'application/vnd.twitchtv.v5+json'}
-
             r = requests.get(channel_url, headers=headers).json()
             game_name = r["game"]
             game_url = urllib.parse.quote(game_name)
+
             speedrun_url = "https://www.speedrun.com/api/v1/games?name={}".format(game_url)
             r = requests.get(speedrun_url).json()
             game_id = r["data"][0]["id"]
+
             speedrun_url = "https://www.speedrun.com/api/v1/games/{}/records?top=1".format(game_id)
             r = requests.get(speedrun_url).json()
             first_place = str(datetime.timedelta(seconds=r["data"][0]["runs"][0]["run"]["times"]["primary_t"]))
+
             user_url = user = r["data"][0]["runs"][0]["run"]["players"][0]["uri"]
             r = requests.get(user_url).json()
             user_name = r["data"]["names"]["international"]
-            self.chat("The \"{}\" world record is {} by {}.".format(game_name, first_place, user_name))
+            self.chat("The world record for \"{}\" is {} by {}.".format(game_name, first_place, user_name))
+
+        elif (cmd == "pb"):
+            if (msg != ""):
+                username = msg.rstrip('\r\n')
+            else:
+                username = "Canight"
+
+            channel_url = "https://api.twitch.tv/kraken/channels/" + self.channel_id
+            headers = {'Client-ID': self.client_id, 'Accept': 'application/vnd.twitchtv.v5+json'}
+            r = requests.get(channel_url, headers=headers).json()
+            game_name = r["game"]
+            game_url = urllib.parse.quote(game_name)
+
+            speedrun_url = "https://www.speedrun.com/api/v1/games?name={}".format(game_url)
+            r = requests.get(speedrun_url).json()
+            game_id = r["data"][0]["id"]
+
+            speedrun_url = "https://www.speedrun.com/api/v1/users/{}/personal-bests".format(username)
+            r = requests.get(speedrun_url).json()
+            if ("status" not in r):
+                pb_run = None
+                for run in r["data"]:
+                    if (run["run"]["game"] == game_id):
+                        pb_run = run
+                        break
+
+                if (pb_run != None):
+                    place = pb_run["place"]
+                    pb = str(datetime.timedelta(seconds=pb_run["run"]["times"]["primary_t"]))
+                    self.chat("{} is rank {} in \"{}\" with a time of {}.".format(username, place, game_name, pb))
+                else:
+                    self.chat("{} has no PB for \"{}\".".format(username, game_name))
+            else:
+                self.chat("Could not find user {}.".format(username))
 
     def chat(self, msg):
         self.connection.privmsg(self.channel, msg)

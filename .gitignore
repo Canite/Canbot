@@ -2,3 +2,4 @@ quotes.txt
 config.py
 config.pyc
 /__pycache__
+*~
