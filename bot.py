@@ -15,14 +15,15 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         self.client_id = client_id
         self.token = token
         self.channel = "#" + channel
-        self.twitch_header = {'Client-ID': client_id, 'Accept': 'application/vnd.twitchtv.v5+json'} 
+        self.twitch_header = {'Client-ID': client_id} 
         signal.signal(signal.SIGINT, self.handle_exit_signal)
         self.exit = False
 
         # Get the channel id, we will need this for v5 API calls
         url = "{}/users?login={}".format(config.TWITCH_API, channel)
         r = requests.get(url, headers=self.twitch_header).json()
-        self.channel_id = r['users'][0]['_id']
+        self.channel_id = r['data'][0]['id']
+        print(self.channel_id)
 
         # Create IRC bot connection
         server = 'irc.chat.twitch.tv'
@@ -52,9 +53,17 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         return
 
     def get_game_name_twitch(self):
-        channel_url = "{}/channels/{}".format(config.TWITCH_API, self.channel_id)
+        channel_url = "{}/streams?user_id={}".format(config.TWITCH_API, self.channel_id)
         r = requests.get(channel_url, headers=self.twitch_header).json()
-        return r["game"]
+        game_name = ""
+        game_id = 0
+        if (r["data"]):
+            game_id = r["data"][0]["game_id"]
+            game_url = "{}/games?id={}".format(config.TWITCH_API, game_id)
+            r = requests.get(game_url, headers=self.twitch_header).json()
+            if (r["data"]):
+                game_name = r["data"][0]["name"]
+        return game_name, game_id
 
     def get_game_name_srl(self, name):
         game_url = urllib.parse.quote(name)
@@ -85,26 +94,28 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         return cat_name, cat_id
 
     def get_pb(self, msg):
-        game_name = self.get_game_name_twitch()
+        twitch_game_name, game_id = self.get_game_name_twitch()
         split_msg = msg.rstrip('\r\n').split(" ")
         if (len(split_msg) > 2):
             username, category = split_msg[:2]
-            game_name = ' '.join(split_msg[2:])
+            twitch_game_name = ' '.join(split_msg[2:])
         elif (len(split_msg) == 2):
             username, category = split_msg
         elif (len(split_msg) == 1 and split_msg[0] != ""):
             username = split_msg[0]
             category = "any"
         else:
-            username = "Canight"
+            username = config.CHANNEL
             category = "any"
 
-        game_name, game_id = self.get_game_name_srl(game_name)
+        game_name, game_id = self.get_game_name_srl(twitch_game_name)
         if (game_name == None):
+            self.chat("Couldn't find \"{}\" on speedrun.com".format(twitch_game_name))
             return
 
         cat_name, cat_id = self.get_category(category, game_id)
         if (cat_name == None):
+            self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
 
         speedrun_url = "{}/users/{}/personal-bests?game=".format(config.SRL_API, username, game_id)
@@ -126,28 +137,31 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             self.chat("Could not find user {}.".format(username))
 
     def get_wr(self, msg):
-        game_name = self.get_game_name_twitch()
+        twitch_game_name, game_id = self.get_game_name_twitch()
         split_msg = msg.rstrip('\r\n').split(" ")
         if (len(split_msg) > 1):
             category = split_msg[0]
-            game_name = ' '.join(split_msg[1:])
+            twitch_game_name = ' '.join(split_msg[1:])
         elif (len(split_msg) == 1 and split_msg[0] != ""):
             category = split_msg[0]
         else:
             category = "any"
 
-        game_name, game_id = self.get_game_name_srl(game_name)
+        game_name, game_id = self.get_game_name_srl(twitch_game_name)
         if (game_name == None):
+            self.chat("Couldn't find \"{}\" on speedrun.com".format(twitch_game_name))
             return
 
         cat_name, cat_id = self.get_category(category, game_id)
         if (cat_name == None):
+            self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
 
-        speedrun_url = "{}/games/{}/records?top=1".format(config.SRL_API, game_id)
+        speedrun_url = "{}/games/{}/records?top=1&miscellaneous=no".format(config.SRL_API, game_id)
         r = requests.get(speedrun_url).json()
         wr_run = None
         for run in r["data"]:
+            print(run)
             if (run["category"] == cat_id):
                 wr_run = run
                 break
@@ -161,9 +175,8 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
     def do_command(self, e, cmd, msg):
         if (cmd == "game"):
-            channel_url = "{}/channels/{}".format(config.TWITCH_API, self.channel_id)
-            r = requests.get(channel_url, headers=self.twitch_header).json()
-            self.chat("The current game is {}".format(r["game"]))
+            current_game, game_id = self.get_game_name_twitch()
+            self.chat("The current game is {}".format(current_game))
 
         elif (cmd == "wr"):
             self.get_wr(msg)
