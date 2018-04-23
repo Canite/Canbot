@@ -9,6 +9,7 @@ import os
 import random
 import datetime
 import urllib
+import shlex
 
 class TwitchBot(irc.bot.SingleServerIRCBot):
     def __init__(self, username, client_id, token, channel):
@@ -67,11 +68,14 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
     def get_game_name_srl(self, name):
         game_url = urllib.parse.quote(name)
-        speedrun_url = "{}/games?name={}".format(config.SRL_API, game_url)
+        speedrun_url = "{}/games?abbreviation={}".format(config.SRL_API, game_url)
         r = requests.get(speedrun_url).json()
         if ("data" not in r or not r["data"]):
-            self.chat("Could not find game {}.".format(name))
-            return None, None
+            speedrun_url = "{}/games?name={}".format(config.SRL_API, game_url)
+            r = requests.get(speedrun_url).json()
+            if ("data" not in r or not r["data"]):
+                self.chat("Could not find game {}.".format(name))
+                return None, None
         game_name = r["data"][0]["names"]["international"]
         game_id = r["data"][0]["id"]
         return game_name, game_id
@@ -84,7 +88,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         cat_id = None
         for cat in r["data"]:
             name = cat["name"]
-            if (category in name.lower()):
+            if (category in name.lower() and cat["type"] == "per-game"):
                 cat_name = name
                 cat_id = cat["id"]
                 break
@@ -95,7 +99,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
     def get_pb(self, msg):
         twitch_game_name, game_id = self.get_game_name_twitch()
-        split_msg = msg.rstrip('\r\n').split(" ")
+        split_msg = shlex.split(msg.rstrip('\r\n').lower())
         if (len(split_msg) > 2):
             username, category = split_msg[:2]
             twitch_game_name = ' '.join(split_msg[2:])
@@ -138,7 +142,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
     def get_wr(self, msg):
         twitch_game_name, game_id = self.get_game_name_twitch()
-        split_msg = msg.rstrip('\r\n').split(" ")
+        split_msg = shlex.split(msg.rstrip('\r\n').lower())
         if (len(split_msg) > 1):
             category = split_msg[0]
             twitch_game_name = ' '.join(split_msg[1:])
@@ -157,14 +161,11 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
 
-        speedrun_url = "{}/games/{}/records?top=1&miscellaneous=no".format(config.SRL_API, game_id)
+        speedrun_url = "{}/leaderboards/{}/category/{}?top=1".format(config.SRL_API, game_id, cat_id)
         r = requests.get(speedrun_url).json()
         wr_run = None
-        for run in r["data"]:
-            print(run)
-            if (run["category"] == cat_id):
-                wr_run = run
-                break
+        if ("status" not in r and "data" in r):
+            wr_run = r["data"]
 
         if (wr_run):
             first_place = str(datetime.timedelta(seconds=wr_run["runs"][0]["run"]["times"]["primary_t"]))
@@ -172,6 +173,8 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             r = requests.get(user_url).json()
             user_name = r["data"]["names"]["international"]
             self.chat("The world record for \"{}\" {} is {} by {}.".format(game_name, cat_name, first_place, user_name))
+        else:
+            self.chat("Could not find world record for \"{}\".".format(game_name))
 
     def do_command(self, e, cmd, msg):
         if (cmd == "game"):
