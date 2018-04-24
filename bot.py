@@ -10,6 +10,7 @@ import random
 import datetime
 import urllib
 import shlex
+import pickle
 
 class TwitchBot(irc.bot.SingleServerIRCBot):
     def __init__(self, username, client_id, token, channel):
@@ -19,6 +20,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         self.twitch_header = {'Client-ID': client_id} 
         signal.signal(signal.SIGINT, self.handle_exit_signal)
         self.exit = False
+        self.commands = self.load_commands()
 
         # Get the channel id, we will need this for v5 API calls
         url = "{}/users?login={}".format(config.TWITCH_API, channel)
@@ -52,6 +54,20 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             print("Received command: " + cmd)
             self.do_command(e, cmd, ' '.join(msg.split(' ')[1:]))
         return
+
+    def load_commands(self):
+        commands_filename = "commands.pkl"
+        if (os.path.exists(commands_filename)):
+            with open(commands_filename, 'rb') as commands_file:
+                print("Loading commands file")
+                return pickle.load(commands_file)
+        else:
+            return {}
+
+    def save_commands(self):
+        commands_filename = "commands.pkl"
+        with open(commands_filename, 'wb') as commands_file:
+            return pickle.dump(self.commands, commands_file, pickle.HIGHEST_PROTOCOL)
 
     def get_game_name_twitch(self):
         channel_url = "{}/streams?user_id={}".format(config.TWITCH_API, self.channel_id)
@@ -176,6 +192,52 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         else:
             self.chat("Could not find world record for \"{}\".".format(game_name))
 
+    def print_help(self, msg):
+        if (msg == "pb"):
+            self.chat("!pb <srl_username> \"<category>\" \"<game>\"")
+
+        elif (msg == "wr"):
+            self.chat("!wr \"<category>\" \"<game>\"")
+
+        elif (msg == "commands"):
+            self.chat("!commands <add/edit> <!command> <text>")
+
+    def edit_commands(self, e, msg):
+        mod = False
+        for tag in e.tags:
+            if (tag["key"] == "badges"):
+                badges = tag["value"]
+                broadcaster = badges.split(",")[0].split("/")[1]
+                mod = bool(broadcaster)
+                if (broadcaster):
+                    break
+            if (tag["key"] == "mod"):
+                mod = bool(tag["value"])
+
+        if (mod):
+            split_msg = msg.rstrip('\r\n').split(" ")
+            if (len(split_msg) > 2):
+                if (split_msg[0] == "add"):
+                    command = split_msg[1][1:]
+                    if (not command in self.commands):
+                        text = " ".join(split_msg[2:])
+                        self.commands[command] = text
+                        self.chat("Added command !{}".format(command))
+                    else:
+                        self.chat("Command \"!{}\" already exists. Use !commands edit to modify it.".format(command))
+                if (split_msg[0] == "edit"):
+                    command = split_msg[1][1:]
+                    if (command in self.commands):
+                        text = " ".join(split_msg[2:])
+                        self.commands[command] = text
+                        self.chat("Edited command !{}".format(command))
+                    else:
+                        self.chat("Command \"!{}\" does not exist. Use !commands add to add it.".format(command))
+            else:
+                self.chat("Usage: !commands <add/edit> <!command> <text>")
+        else:
+            self.chat("Only moderators can edit commands")
+
     def do_command(self, e, cmd, msg):
         if (cmd == "game"):
             current_game, game_id = self.get_game_name_twitch()
@@ -187,11 +249,21 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         elif (cmd == "pb"):
             self.get_pb(msg)
 
+        elif (cmd == "help"):
+            self.print_help(msg)
+
+        elif (cmd == "commands"):
+            self.edit_commands(e, msg)
+
+        elif(cmd in self.commands):
+            self.chat(self.commands[cmd])
+
     def chat(self, msg):
         self.connection.privmsg(self.channel, msg)
 
     def handle_exit_signal(self, signal, frame):
         print("Goodbye, cruel world...")
+        self.save_commands()
         self.die()
 
 def main():
