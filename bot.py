@@ -7,7 +7,7 @@ import signal
 import sys
 import os
 import random
-import datetime
+from datetime import datetime, timedelta
 import urllib
 import shlex
 import pickle
@@ -138,7 +138,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
 
-        speedrun_url = "{}/users/{}/personal-bests?game=".format(config.SRL_API, username, game_id)
+        speedrun_url = "{}/users/{}/personal-bests?game={}".format(config.SRL_API, username, game_id)
         r = requests.get(speedrun_url).json()
         if ("status" not in r):
             pb_run = None
@@ -149,7 +149,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
             if (pb_run != None):
                 place = pb_run["place"]
-                pb = str(datetime.timedelta(seconds=pb_run["run"]["times"]["primary_t"]))
+                pb = str(timedelta(seconds=pb_run["run"]["times"]["primary_t"]))
                 self.chat("{} is rank {} in \"{}\" {} with a time of {}.".format(username, place, game_name, cat_name, pb))
             else:
                 self.chat("{} has no PB for \"{}\" {}.".format(username, game_name, cat_name))
@@ -184,7 +184,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             wr_run = r["data"]
 
         if (wr_run):
-            first_place = str(datetime.timedelta(seconds=wr_run["runs"][0]["run"]["times"]["primary_t"]))
+            first_place = str(timedelta(seconds=wr_run["runs"][0]["run"]["times"]["primary_t"]))
             user_url = user = wr_run["runs"][0]["run"]["players"][0]["uri"]
             r = requests.get(user_url).json()
             user_name = r["data"]["names"]["international"]
@@ -201,6 +201,9 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
         elif (msg == "commands"):
             self.chat("!commands <add/edit> <!command> <text>")
+
+        else:
+            self.chat("!help <pb/wr/commands>")
 
     def edit_commands(self, e, msg):
         mod = False
@@ -236,7 +239,26 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             else:
                 self.chat("Usage: !commands <add/edit> <!command> <text>")
         else:
-            self.chat("Only moderators can edit commands")
+            self.chat("Only moderators can edit commands.")
+
+    def get_followage(self, e):
+        user_id = ""
+        user_name = ""
+        for tag in e.tags:
+            if (tag["key"] == "user-id"):
+                user_id = tag["value"]
+            elif (tag["key"] == "display-name"):
+                user_name = tag["value"]
+
+        twitch_url = "{}/users/follows?from_id={}&to_id={}".format(config.TWITCH_API, user_id, self.channel_id)
+        r = requests.get(twitch_url, headers=self.twitch_header).json()
+        if ("total" in r and r["total"] > 0):
+            follow_date = datetime.strptime(r["data"][0]["followed_at"], "%Y-%m-%dT%H:%M:%SZ")
+            today = datetime.today()
+            followage = str(today - follow_date)
+            self.chat("{} has been following {} for {}.".format(user_name, config.CHANNEL, followage))
+        else:
+            self.chat("{} is not following {}.".format(user_name, config.CHANNEL))
 
     def do_command(self, e, cmd, msg):
         if (cmd == "game"):
@@ -254,6 +276,9 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
         elif (cmd == "commands"):
             self.edit_commands(e, msg)
+
+        elif (cmd == "followage"):
+            self.get_followage(e)
 
         elif(cmd in self.commands):
             self.chat(self.commands[cmd])
