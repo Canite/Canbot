@@ -255,7 +255,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         if ("total" in r and r["total"] > 0):
             follow_date = datetime.strptime(r["data"][0]["followed_at"], "%Y-%m-%dT%H:%M:%SZ")
             today = datetime.today()
-            followage = str(today - follow_date)
+            followage = td_format(today - follow_date)
             self.chat("{} has been following {} for {}.".format(user_name, config.CHANNEL, followage))
         else:
             self.chat("{} is not following {}.".format(user_name, config.CHANNEL))
@@ -290,6 +290,26 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         print("Goodbye, cruel world...")
         self.save_commands()
         self.die()
+
+def td_format(td_object):
+    seconds = int(td_object.total_seconds())
+    periods = [
+        ('year',        60*60*24*365),
+        ('month',       60*60*24*30),
+        ('day',         60*60*24),
+        ('hour',        60*60),
+        ('minute',      60),
+        ('second',      1)
+    ]
+
+    strings=[]
+    for period_name, period_seconds in periods:
+        if seconds >= period_seconds:
+            period_value , seconds = divmod(seconds, period_seconds)
+            has_s = 's' if period_value > 1 else ''
+            strings.append("%s %s%s" % (period_value, period_name, has_s))
+
+    return ", ".join(strings)
 
 def main():
     random.seed()
