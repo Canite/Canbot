@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import urllib
 import shlex
 import pickle
+import threading
 
 class TwitchBot(irc.bot.SingleServerIRCBot):
     def __init__(self, username, client_id, token, channel):
@@ -21,6 +22,9 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         signal.signal(signal.SIGINT, self.handle_exit_signal)
         self.exit = False
         self.commands = self.load_commands()
+        self.viewers = self.load_viewers()
+        self.stop_timer_event = threading.Event()
+        self.points_timer = RecurrentTimer(self.stop_timer_event, 60.0, self.add_points)
 
         # Get the channel id, we will need this for v5 API calls
         url = "{}/users?login={}".format(config.TWITCH_API, channel)
@@ -46,6 +50,21 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         self.counter = edc.EggDupeCounter(c.socket, self.channel, config.EGG_BOTTLE, config.EMPTY_BOTTLE, config.C_RIGHT_COORDS)
         self.counter.start()
 
+        self.points_timer.start()
+
+    def add_points(self):
+        #current_viewers = self.channels[self.channel].users()
+        # Have to use the old API to get chatters I guess...
+        chatters_url = "https://tmi.twitch.tv/group/user/{}/chatters".format(config.CHANNEL)
+        r = requests.get(chatters_url).json()
+        for viewer_list in r["chatters"].values():
+            for viewer in viewer_list:
+                if (viewer not in self.viewers):
+                    self.viewers[viewer] = 50
+                else:
+                    self.viewers[viewer] += 15
+                    print("{}: {}".format(viewer, self.viewers[viewer]))
+
     def on_pubmsg(self, c, e):
         msg = e.arguments[0]
         # If a chat message starts with an exclamation point, try to run it as a command
@@ -64,10 +83,24 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         else:
             return {}
 
+    def load_viewers(self):
+        viewers_filename = "viewers.pkl"
+        if (os.path.exists(viewers_filename)):
+            with open(viewers_filename, 'rb') as viewers_file:
+                print("Loading viewers file")
+                return pickle.load(viewers_file)
+        else:
+            return {}
+
     def save_commands(self):
         commands_filename = "commands.pkl"
         with open(commands_filename, 'wb') as commands_file:
             return pickle.dump(self.commands, commands_file, pickle.HIGHEST_PROTOCOL)
+
+    def save_viewers(self):
+        viewers_filename = "viewers.pkl"
+        with open(viewers_filename, 'wb') as viewers_file:
+            return pickle.dump(self.viewers, viewers_file, pickle.HIGHEST_PROTOCOL)
 
     def get_game_name_twitch(self):
         channel_url = "{}/streams?user_id={}".format(config.TWITCH_API, self.channel_id)
@@ -260,6 +293,15 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         else:
             self.chat("{} is not following {}.".format(user_name, config.CHANNEL))
 
+    def get_points(self, e):
+        user_name = ""
+        for tag in e.tags:
+            if (tag["key"] == "display-name"):
+                user_name = tag["value"]
+
+        if (user_name.lower() in self.viewers):
+            self.chat("@{}, you have {} points.".format(user_name, self.viewers[user_name.lower()]))
+
     def do_command(self, e, cmd, msg):
         if (cmd == "game"):
             current_game, game_id = self.get_game_name_twitch()
@@ -280,6 +322,9 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         elif (cmd == "followage"):
             self.get_followage(e)
 
+        elif (cmd == "points"):
+            self.get_points(e)
+
         elif(cmd in self.commands):
             self.chat(self.commands[cmd])
 
@@ -289,7 +334,20 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
     def handle_exit_signal(self, signal, frame):
         print("Goodbye, cruel world...")
         self.save_commands()
+        self.save_viewers()
+        self.stop_timer_event.set()
         self.die()
+
+class RecurrentTimer(threading.Thread):
+    def __init__(self, event, wait_time, func):
+        threading.Thread.__init__(self)
+        self.stopped = event
+        self.wait_time = wait_time
+        self.func = func
+
+    def run(self):
+        while not self.stopped.wait(self.wait_time):
+            self.func()
 
 def td_format(td_object):
     seconds = int(td_object.total_seconds())
