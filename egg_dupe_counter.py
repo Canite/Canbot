@@ -38,7 +38,10 @@ class EggDupeCounter(mp.Process):
         memdc.SelectObject(bmp)
 
         while not self.exit:
-            memdc.BitBlt((0, 0), (self.c_right_w, self.c_right_h), srcdc, (self.c_right_x, self.c_right_y), win32con.SRCCOPY)
+            try:
+                memdc.BitBlt((0, 0), (self.c_right_w, self.c_right_h), srcdc, (self.c_right_x, self.c_right_y), win32con.SRCCOPY)
+            except win32ui.error:
+                pass
             screen_rect = np.fromstring(bmp.GetBitmapBits(True), dtype="uint8").reshape((self.c_right_h, self.c_right_w, 4))
             c_right = self.normalize(screen_rect)
             if (self.empty):

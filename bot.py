@@ -12,6 +12,7 @@ import urllib
 import shlex
 import pickle
 import threading
+from sortedcontainers import SortedList
 
 class TwitchBot(irc.bot.SingleServerIRCBot):
     def __init__(self, username, client_id, token, channel):
@@ -23,6 +24,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         self.exit = False
         self.commands = self.load_commands()
         self.viewers = self.load_viewers()
+        self.viewer_ranks = SortedList(self.viewers.values())
         self.stop_timer_event = threading.Event()
         self.points_timer = RecurrentTimer(self.stop_timer_event, 60.0, self.add_points)
 
@@ -64,6 +66,8 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
                 else:
                     self.viewers[viewer] += 15
                     print("{}: {}".format(viewer, self.viewers[viewer]))
+
+        self.viewer_ranks = SortedList(self.viewers.values())
 
     def on_pubmsg(self, c, e):
         msg = e.arguments[0]
@@ -300,7 +304,94 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
                 user_name = tag["value"]
 
         if (user_name.lower() in self.viewers):
-            self.chat("@{}, you have {} points.".format(user_name, self.viewers[user_name.lower()]))
+            points = self.viewers[user_name.lower()]
+            total_viewers = len(self.viewer_ranks)
+            rank = total_viewers - self.viewer_ranks.index(points)
+            self.chat("@{}, you are rank {}/{} with {} points.".format(user_name, rank, total_viewers, points))
+
+    def gift_points(self, e, msg):
+        mod = False
+        for tag in e.tags:
+            if (tag["key"] == "badges"):
+                badges = tag["value"]
+                broadcaster = badges.split(",")[0].split("/")[1]
+                mod = bool(broadcaster)
+                if (broadcaster):
+                    break
+            if (tag["key"] == "mod"):
+                mod = bool(tag["value"])
+
+        if (mod):
+            split_msg = msg.rstrip('\r\n').split(" ")
+            if (len(split_msg) < 1):
+                self.chat("!gift <points> <user/all>")
+                return
+            elif (len(split_msg) == 1):
+                try:
+                    points = int(split_msg[0])
+                    user = "all"
+                except ValueError:
+                    self.chat("Points must be a number")
+                    return
+            else:
+                try:
+                    points = int(split_msg[0])
+                    user = split_msg[1].lower()
+                except ValueError:
+                    self.chat("Points must be a number")
+                    return
+
+            chatters_url = "https://tmi.twitch.tv/group/user/{}/chatters".format(config.CHANNEL)
+            r = requests.get(chatters_url).json()
+            for viewer_list in r["chatters"].values():
+                for viewer in viewer_list:
+                    if ((user == "all" or user == viewer.lower())):
+                        if (viewer in self.viewers):
+                            self.viewers[viewer] += points
+                        else:
+                            self.viewers[viewer] = points
+
+            self.viewer_ranks = SortedList(self.viewers.values())
+
+            if (user == "all"):
+                self.chat("Gifted {} points to everyone!".format(points))
+            else:
+                self.chat("Gifted {} points to {}!".format(points, user))
+
+    def gamble(self, e, msg):
+        user_name = ""
+        for tag in e.tags:
+            if (tag["key"] == "display-name"):
+                user_name = tag["value"]
+
+        if (user_name.lower() in self.viewers):
+            split_msg = msg.rstrip('\r\n').split(" ")
+            if (len(split_msg) < 1):
+                self.chat("!gamble <points/all>")
+                return
+            elif (len(split_msg) == 1):
+                total_points = self.viewers[user_name.lower()]
+                try:
+                    if (split_msg[0] == "all"):
+                        points = total_points
+                    else:
+                        points = int(split_msg[0])
+                except ValueError:
+                    self.chat("Points must be a number")
+                    return
+
+            if (points > total_points):
+                self.chat("@{}, You don't have {} points!".format(user_name, points))
+                return
+
+            if (random.random() < 0.5):
+                self.viewers[user_name.lower()] += points
+                self.viewer_ranks = SortedList(self.viewers.values())
+                self.chat("@{}, You won {} points! Wow.".format(user_name, points))
+            else:
+                self.viewers[user_name.lower()] -= points
+                self.viewer_ranks = SortedList(self.viewers.values())
+                self.chat("@{}, You lost {} points... That's not good.".format(user_name, points))
 
     def do_command(self, e, cmd, msg):
         if (cmd == "game"):
@@ -324,6 +415,12 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
         elif (cmd == "points"):
             self.get_points(e)
+
+        elif (cmd == "gift"):
+            self.gift_points(e, msg)
+
+        elif (cmd == "gamble"):
+            self.gamble(e, msg)
 
         elif(cmd in self.commands):
             self.chat(self.commands[cmd])
