@@ -23,7 +23,10 @@ class EggDupeCounter(mp.Process):
         if (arr.size != 0):
             rng = arr.max()-arr.min()
             amin = arr.min()
-            return (arr-amin)*255/rng
+            if (rng != 0):
+                return (arr-amin)*255/rng
+            else:
+                return arr
         else:
             return arr
 

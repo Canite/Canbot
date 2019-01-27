@@ -65,7 +65,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
                     self.viewers[viewer] = 50
                 else:
                     self.viewers[viewer] += 15
-                    print("{}: {}".format(viewer, self.viewers[viewer]))
 
         self.viewer_ranks = SortedList(self.viewers.values())
 
@@ -309,6 +308,19 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             rank = total_viewers - self.viewer_ranks.index(points)
             self.chat("@{}, you are rank {}/{} with {} points.".format(user_name, rank, total_viewers, points))
 
+    def get_top(self, e):
+        top5 = self.viewer_ranks[-5:]
+        msgs = ["Rank {}: ".format(i + 1) for i in range(5)]
+        for name, points in self.viewers.items():
+            if (points in top5):
+                rank = 4 - top5.index(points)
+                msgs[rank] += name + " "
+
+        for i in range(5):
+            msgs[i] += " ({})".format(top5[4 - i])
+        self.chat("; ".join(msgs))
+
+
     def gift_points(self, e, msg):
         mod = False
         for tag in e.tags:
@@ -407,7 +419,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         elif (cmd == "help"):
             self.print_help(msg)
 
-        elif (cmd == "commands"):
+        elif (cmd == "commands" or cmd =="command"):
             self.edit_commands(e, msg)
 
         elif (cmd == "followage"):
@@ -415,6 +427,9 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
         elif (cmd == "points"):
             self.get_points(e)
+
+        elif (cmd == "top"):
+            self.get_top(e)
 
         elif (cmd == "gift"):
             self.gift_points(e, msg)
