@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 import config
-import egg_dupe_counter as edc
 import irc.bot
 import requests
 import signal
@@ -12,14 +11,15 @@ import urllib
 import shlex
 import pickle
 import threading
+import re
 from sortedcontainers import SortedList
 
 class TwitchBot(irc.bot.SingleServerIRCBot):
     def __init__(self, username, client_id, token, channel):
         self.client_id = client_id
-        self.token = token
+        self.token = "oauth:" + token
         self.channel = "#" + channel
-        self.twitch_header = {'Client-ID': client_id} 
+        self.twitch_header = {'Client-ID': client_id, "Authorization": "Bearer " + token} 
         signal.signal(signal.SIGINT, self.handle_exit_signal)
         self.exit = False
         self.commands = self.load_commands()
@@ -27,10 +27,12 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         self.viewer_ranks = SortedList(self.viewers.values())
         self.stop_timer_event = threading.Event()
         self.points_timer = RecurrentTimer(self.stop_timer_event, 60.0, self.add_points)
+        self.category_re = re.compile(r"[any|100|glitchless]", re.IGNORECASE)
 
         # Get the channel id, we will need this for v5 API calls
         url = "{}/users?login={}".format(config.TWITCH_API, channel)
         r = requests.get(url, headers=self.twitch_header).json()
+        print(r)
         self.channel_id = r['data'][0]['id']
         print(self.channel_id)
 
@@ -38,7 +40,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         server = 'irc.chat.twitch.tv'
         port = 6667
         print('Connecting to ' + server + ' on port ' + str(port) + '...')
-        irc.bot.SingleServerIRCBot.__init__(self, [(server, port, token)], username, username)
+        irc.bot.SingleServerIRCBot.__init__(self, [(server, port, self.token)], username, username)
 
     def on_welcome(self, c, e):
         print('Joining ' + self.channel)
@@ -48,11 +50,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         c.cap('REQ', ':twitch.tv/tags')
         c.cap('REQ', ':twitch.tv/commands')
         c.join(self.channel)
-
-        self.counter = edc.EggDupeCounter(c.socket, self.channel, config.EGG_BOTTLE, config.EMPTY_BOTTLE, config.C_RIGHT_COORDS)
-        self.counter.start()
-
-        self.points_timer.start()
 
     def add_points(self):
         #current_viewers = self.channels[self.channel].users()
@@ -110,13 +107,18 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         r = requests.get(channel_url, headers=self.twitch_header).json()
         game_name = ""
         game_id = 0
+        category = ""
         if (r["data"]):
             game_id = r["data"][0]["game_id"]
             game_url = "{}/games?id={}".format(config.TWITCH_API, game_id)
             r = requests.get(game_url, headers=self.twitch_header).json()
             if (r["data"]):
                 game_name = r["data"][0]["name"]
-        return game_name, game_id
+                stream_title = r["data"][0]["title"]
+                catgeory_match = category_re.match(stream_title)
+                if (catgeory_match):
+                    category = category_match.group(0)
+        return game_name, game_id, category
 
     def get_game_name_srl(self, name):
         game_url = urllib.parse.quote(name)
@@ -138,15 +140,18 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         r = requests.get(speedrun_url).json()
         cat_name = None
         cat_id = None
-        for cat in r["data"]:
-            name = cat["name"]
-            if (category in name.lower() and cat["type"] == "per-game"):
-                cat_name = name
-                cat_id = cat["id"]
-                break
+        if(r["data"]):
+            for cat in r["data"]:
+                name = cat["name"]
+                if (category in name.lower() and cat["type"] == "per-game"):
+                    cat_name = name
+                    cat_id = cat["id"]
+                    break
 
-        if (cat_id == ""):
-            self.chat("Could not find {} category for \"{}\".".format(category, game_name))
+            if (cat_name == None):
+                cat_name = r["data"][0]["name"]
+                cat_id = r["data"][0]["id"]
+
         return cat_name, cat_id
 
     def get_pb(self, msg):
@@ -193,15 +198,22 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             self.chat("Could not find user {}.".format(username))
 
     def get_wr(self, msg):
-        twitch_game_name, game_id = self.get_game_name_twitch()
+        twitch_game_name, game_id, category = self.get_game_name_twitch()
         split_msg = shlex.split(msg.rstrip('\r\n').lower())
         if (len(split_msg) > 1):
             category = split_msg[0]
             twitch_game_name = ' '.join(split_msg[1:])
         elif (len(split_msg) == 1 and split_msg[0] != ""):
-            category = split_msg[0]
-        else:
+            if (twitch_game_name == ""):
+                twitch_game_name = split_msg[0]
+            else:
+                category = split_msg[0]
+        elif (category == ""):
             category = "any"
+
+        if (twitch_game_name == ""):
+            self.chat("Couldn't find game name from category")
+            return
 
         game_name, game_id = self.get_game_name_srl(twitch_game_name)
         if (game_name == None):
@@ -484,7 +496,7 @@ def td_format(td_object):
 def main():
     random.seed()
 
-    bot = TwitchBot(config.USERNAME, config.CLIENT_ID, config.TOKEN, config.CHANNEL)
+    bot = TwitchBot(config.USERNAME, config.CLIENT_ID, config.OAUTH_TOKEN, config.CHANNEL)
     bot.start()
 
 if __name__ == "__main__":
