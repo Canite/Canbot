@@ -23,10 +23,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         signal.signal(signal.SIGINT, self.handle_exit_signal)
         self.exit = False
         self.commands = self.load_commands()
-        self.viewers = self.load_viewers()
-        self.viewer_ranks = SortedList(self.viewers.values())
-        self.stop_timer_event = threading.Event()
-        self.points_timer = RecurrentTimer(self.stop_timer_event, 60.0, self.add_points)
         self.category_re = re.compile(r"[any|100|glitchless]", re.IGNORECASE)
 
         # Get the channel id, we will need this for v5 API calls
@@ -51,20 +47,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         c.cap('REQ', ':twitch.tv/commands')
         c.join(self.channel)
 
-    def add_points(self):
-        #current_viewers = self.channels[self.channel].users()
-        # Have to use the old API to get chatters I guess...
-        chatters_url = "https://tmi.twitch.tv/group/user/{}/chatters".format(config.CHANNEL)
-        r = requests.get(chatters_url).json()
-        for viewer_list in r["chatters"].values():
-            for viewer in viewer_list:
-                if (viewer not in self.viewers):
-                    self.viewers[viewer] = 50
-                else:
-                    self.viewers[viewer] += 15
-
-        self.viewer_ranks = SortedList(self.viewers.values())
-
     def on_pubmsg(self, c, e):
         msg = e.arguments[0]
         # If a chat message starts with an exclamation point, try to run it as a command
@@ -83,24 +65,10 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         else:
             return {}
 
-    def load_viewers(self):
-        viewers_filename = "viewers.pkl"
-        if (os.path.exists(viewers_filename)):
-            with open(viewers_filename, 'rb') as viewers_file:
-                print("Loading viewers file")
-                return pickle.load(viewers_file)
-        else:
-            return {}
-
     def save_commands(self):
         commands_filename = "commands.pkl"
         with open(commands_filename, 'wb') as commands_file:
             return pickle.dump(self.commands, commands_file, pickle.HIGHEST_PROTOCOL)
-
-    def save_viewers(self):
-        viewers_filename = "viewers.pkl"
-        with open(viewers_filename, 'wb') as viewers_file:
-            return pickle.dump(self.viewers, viewers_file, pickle.HIGHEST_PROTOCOL)
 
     def get_game_name_twitch(self):
         channel_url = "{}/streams?user_id={}".format(config.TWITCH_API, self.channel_id)
@@ -269,6 +237,8 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             split_msg = msg.rstrip('\r\n').split(" ")
             if (len(split_msg) > 2):
                 if (split_msg[0] == "add"):
+                    if (not split_msg[1][0] == "!"):
+                        split_msg[1] = "!" + split_msg[1]
                     command = split_msg[1][1:]
                     if (not command in self.commands):
                         text = " ".join(split_msg[2:])
@@ -308,115 +278,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         else:
             self.chat("{} is not following {}.".format(user_name, config.CHANNEL))
 
-    def get_points(self, e):
-        user_name = ""
-        for tag in e.tags:
-            if (tag["key"] == "display-name"):
-                user_name = tag["value"]
-
-        if (user_name.lower() in self.viewers):
-            points = self.viewers[user_name.lower()]
-            total_viewers = len(self.viewer_ranks)
-            rank = total_viewers - self.viewer_ranks.index(points)
-            self.chat("@{}, you are rank {}/{} with {} points.".format(user_name, rank, total_viewers, points))
-
-    def get_top(self, e):
-        top5 = self.viewer_ranks[-5:]
-        msgs = ["Rank {}: ".format(i + 1) for i in range(5)]
-        for name, points in self.viewers.items():
-            if (points in top5):
-                rank = 4 - top5.index(points)
-                msgs[rank] += name + " "
-
-        for i in range(5):
-            msgs[i] += " ({})".format(top5[4 - i])
-        self.chat("; ".join(msgs))
-
-
-    def gift_points(self, e, msg):
-        mod = False
-        for tag in e.tags:
-            if (tag["key"] == "badges"):
-                badges = tag["value"]
-                broadcaster = badges.split(",")[0].split("/")[1]
-                mod = bool(broadcaster)
-                if (broadcaster):
-                    break
-            if (tag["key"] == "mod"):
-                mod = bool(tag["value"])
-
-        if (mod):
-            split_msg = msg.rstrip('\r\n').split(" ")
-            if (len(split_msg) < 1):
-                self.chat("!gift <points> <user/all>")
-                return
-            elif (len(split_msg) == 1):
-                try:
-                    points = int(split_msg[0])
-                    user = "all"
-                except ValueError:
-                    self.chat("Points must be a number")
-                    return
-            else:
-                try:
-                    points = int(split_msg[0])
-                    user = split_msg[1].lower()
-                except ValueError:
-                    self.chat("Points must be a number")
-                    return
-
-            chatters_url = "https://tmi.twitch.tv/group/user/{}/chatters".format(config.CHANNEL)
-            r = requests.get(chatters_url).json()
-            for viewer_list in r["chatters"].values():
-                for viewer in viewer_list:
-                    if ((user == "all" or user == viewer.lower())):
-                        if (viewer in self.viewers):
-                            self.viewers[viewer] += points
-                        else:
-                            self.viewers[viewer] = points
-
-            self.viewer_ranks = SortedList(self.viewers.values())
-
-            if (user == "all"):
-                self.chat("Gifted {} points to everyone!".format(points))
-            else:
-                self.chat("Gifted {} points to {}!".format(points, user))
-
-    def gamble(self, e, msg):
-        user_name = ""
-        for tag in e.tags:
-            if (tag["key"] == "display-name"):
-                user_name = tag["value"]
-
-        if (user_name.lower() in self.viewers):
-            split_msg = msg.rstrip('\r\n').split(" ")
-            if (len(split_msg) < 1):
-                self.chat("!gamble <points/all>")
-                return
-            elif (len(split_msg) == 1):
-                total_points = self.viewers[user_name.lower()]
-                try:
-                    if (split_msg[0] == "all"):
-                        points = total_points
-                    else:
-                        points = int(split_msg[0])
-                except ValueError:
-                    self.chat("Points must be a number")
-                    return
-
-            if (points > total_points):
-                self.chat("@{}, You don't have {} points!".format(user_name, points))
-                return
-
-            if (random.random() < 0.5):
-                self.viewers[user_name.lower()] += points
-                self.viewer_ranks = SortedList(self.viewers.values())
-                self.chat("@{}, You won {} points! Wow.".format(user_name, points))
-            else:
-                self.viewers[user_name.lower()] -= points
-                self.viewer_ranks = SortedList(self.viewers.values())
-                self.chat("@{}, You lost {} points... That's not good.".format(user_name, points))
-
     def do_command(self, e, cmd, msg):
         if (cmd == "game"):
             current_game, game_id = self.get_game_name_twitch()
@@ -437,18 +298,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         elif (cmd == "followage"):
             self.get_followage(e)
 
-        elif (cmd == "points"):
-            self.get_points(e)
-
-        elif (cmd == "top"):
-            self.get_top(e)
-
-        elif (cmd == "gift"):
-            self.gift_points(e, msg)
-
-        elif (cmd == "gamble"):
-            self.gamble(e, msg)
-
         elif(cmd in self.commands):
             self.chat(self.commands[cmd])
 
@@ -458,8 +307,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
     def handle_exit_signal(self, signal, frame):
         print("Goodbye, cruel world...")
         self.save_commands()
-        self.save_viewers()
-        self.stop_timer_event.set()
         self.die()
 
 class RecurrentTimer(threading.Thread):
