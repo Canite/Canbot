@@ -1,3 +1,4 @@
+# Rename this file to config.py after filling in your details
 # The Username of your bot
 USERNAME="canbot_"
 # The bot's OAuth token for login, don't let anyone see this!
