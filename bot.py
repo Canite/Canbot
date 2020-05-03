@@ -11,7 +11,6 @@ import urllib
 import shlex
 import pickle
 import threading
-import re
 from sortedcontainers import SortedList
 
 class TwitchBot(irc.bot.SingleServerIRCBot):
@@ -23,12 +22,10 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         signal.signal(signal.SIGINT, self.handle_exit_signal)
         self.exit = False
         self.commands = self.load_commands()
-        self.category_re = re.compile(r"[any|100|glitchless]", re.IGNORECASE)
 
         # Get the channel id, we will need this for v5 API calls
         url = "{}/users?login={}".format(config.TWITCH_API, channel)
         r = requests.get(url, headers=self.twitch_header).json()
-        print(r)
         self.channel_id = r['data'][0]['id']
         print(self.channel_id)
 
@@ -75,7 +72,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         r = requests.get(channel_url, headers=self.twitch_header).json()
         game_name = ""
         game_id = 0
-        category = ""
+        stream_title = ""
         if (r["data"]):
             stream_title = r["data"][0]["title"]
             game_id = r["data"][0]["game_id"]
@@ -83,12 +80,12 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             r = requests.get(game_url, headers=self.twitch_header).json()
             if (r["data"]):
                 game_name = r["data"][0]["name"]
-                category_match = self.category_re.match(stream_title)
-                if (category_match):
-                    category = category_match.group(0)
-        return game_name, game_id, category
+
+        return game_name, game_id, stream_title 
 
     def get_game_name_srl(self, name):
+        game_name = None
+        game_id = None
         game_url = urllib.parse.quote(name)
         speedrun_url = "{}/games?abbreviation={}".format(config.SRL_API, game_url)
         r = requests.get(speedrun_url).json()
@@ -96,22 +93,46 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             speedrun_url = "{}/games?name={}".format(config.SRL_API, game_url)
             r = requests.get(speedrun_url).json()
             if ("data" not in r or not r["data"]):
-                self.chat("Could not find game {}.".format(name))
+                #self.chat("Could not find game {}.".format(name))
                 return None, None
-        game_name = r["data"][0]["names"]["international"]
-        game_id = r["data"][0]["id"]
+            else:
+                for game in r["data"]:
+                    if (game["romhack"] != "true"):
+                        twitch_name = game["names"]["twitch"]
+                        if (twitch_name.lower() == name.lower()):
+                            game_name = twitch_name
+                            game_id = game["id"]
+                            break
+                # Still none, check for substring
+                if (game_name == None):
+                    for game in r["data"]:
+                        twitch_name = game["names"]["twitch"]
+                        if (name.lower() in twitch_name.lower()):
+                            game_name = twitch_name
+                            game_id = game["id"]
+                            break
+        else:
+            game_name = r["data"][0]["names"]["twitch"]
+            game_id = r["data"][0]["id"]
+
         return game_name, game_id
 
-    def get_category(self, category, game_id):
-        cat_url = urllib.parse.quote(category)
+    def get_category(self, category, game_id, stream_title):
         speedrun_url = "{}/games/{}/categories".format(config.SRL_API, game_id)
         r = requests.get(speedrun_url).json()
         cat_name = None
         cat_id = None
-        if(r["data"]):
+        defaulted = False
+        if("data" in r and r["data"]):
             for cat in r["data"]:
                 name = cat["name"]
-                if (category in name.lower() and cat["type"] == "per-game"):
+                if (category == None):
+                    # search stream title
+                    if (name.lower() in stream_title.lower() and cat["type"] == "per-game"):
+                        cat_name = name
+                        cat_id = cat["id"]
+                        break
+                elif (category in name.lower() and cat["type"] == "per-game"):
                     cat_name = name
                     cat_id = cat["id"]
                     break
@@ -119,31 +140,29 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             if (cat_name == None):
                 cat_name = r["data"][0]["name"]
                 cat_id = r["data"][0]["id"]
+                defaulted = True
 
-        return cat_name, cat_id
+        return cat_name, cat_id, defaulted
 
     def get_pb(self, msg):
-        twitch_game_name, game_id, category = self.get_game_name_twitch()
+        twitch_game_name, game_id, stream_title = self.get_game_name_twitch()
         split_msg = shlex.split(msg.rstrip('\r\n').lower())
+        category = None
         if (len(split_msg) > 2):
             username, twitch_game_name, category = split_msg[:3]
         elif (len(split_msg) == 2):
             username, category = split_msg
         elif (len(split_msg) == 1 and split_msg[0] != ""):
             username = split_msg[0]
-            if (category == ""):
-                category = "any"
         else:
             username = config.CHANNEL
-            if (category == ""):
-                category = "any"
 
         game_name, game_id = self.get_game_name_srl(twitch_game_name)
         if (game_name == None):
             self.chat("Couldn't find \"{}\" on speedrun.com".format(twitch_game_name))
             return
 
-        cat_name, cat_id = self.get_category(category, game_id)
+        cat_name, cat_id = self.get_category(category, game_id, stream_title)
         if (cat_name == None):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
@@ -167,8 +186,9 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             self.chat("Could not find user {}.".format(username))
 
     def get_wr(self, msg):
-        twitch_game_name, game_id, category = self.get_game_name_twitch()
+        twitch_game_name, game_id, stream_title = self.get_game_name_twitch()
         split_msg = shlex.split(msg.rstrip('\r\n').lower())
+        category = None
         if (len(split_msg) > 1):
             twitch_game_name, category = split_msg[:2]
         elif (len(split_msg) == 1 and split_msg[0] != ""):
@@ -176,8 +196,6 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
                 twitch_game_name = split_msg[0]
             else:
                 category = split_msg[0]
-        elif (category == ""):
-            category = "any"
 
         if (twitch_game_name == ""):
             self.chat("Couldn't find game name from category")
@@ -188,10 +206,24 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
             self.chat("Couldn't find \"{}\" on speedrun.com".format(twitch_game_name))
             return
 
-        cat_name, cat_id = self.get_category(category, game_id)
+        cat_name, cat_id, defaulted = self.get_category(category, game_id, stream_title)
         if (cat_name == None):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
+        elif (defaulted):
+            # check for game
+            twitch_game_name = category
+            game_name_2, game_id_2 = self.get_game_name_srl(twitch_game_name)
+            if (game_name_2 != None):
+                game_name = game_name_2
+                game_id = game_id_2
+                cat_name, cat_id, defaulted = self.get_category("", game_id, "")
+                if (cat_name == None):
+                    self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
+                    return
+            else:
+                self.chat("Couldn't find \"{}\" on speedrun.com".format(twitch_game_name))
+                return
 
         speedrun_url = "{}/leaderboards/{}/category/{}?top=1".format(config.SRL_API, game_id, cat_id)
         r = requests.get(speedrun_url).json()
@@ -210,10 +242,10 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
     def print_help(self, msg):
         if (msg == "pb"):
-            self.chat("!pb <srl_username> \"<category>\" \"<game>\"")
+            self.chat("!pb <srl_username> \"<game>\" \"<category>\"")
 
         elif (msg == "wr"):
-            self.chat("!wr \"<category>\" \"<game>\"")
+            self.chat("!wr \"<game>\" \"<category>\"")
 
         elif (msg == "commands"):
             self.chat("!commands <add/edit> <!command> <text>")
