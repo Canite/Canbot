@@ -126,16 +126,17 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         twitch_game_name, game_id, category = self.get_game_name_twitch()
         split_msg = shlex.split(msg.rstrip('\r\n').lower())
         if (len(split_msg) > 2):
-            username, category = split_msg[:2]
-            twitch_game_name = ' '.join(split_msg[2:])
+            username, twitch_game_name, category = split_msg[:3]
         elif (len(split_msg) == 2):
             username, category = split_msg
         elif (len(split_msg) == 1 and split_msg[0] != ""):
             username = split_msg[0]
-            category = "any"
+            if (category == ""):
+                category = "any"
         else:
             username = config.CHANNEL
-            category = "any"
+            if (category == ""):
+                category = "any"
 
         game_name, game_id = self.get_game_name_srl(twitch_game_name)
         if (game_name == None):
@@ -169,8 +170,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         twitch_game_name, game_id, category = self.get_game_name_twitch()
         split_msg = shlex.split(msg.rstrip('\r\n').lower())
         if (len(split_msg) > 1):
-            category = split_msg[0]
-            twitch_game_name = ' '.join(split_msg[1:])
+            twitch_game_name, category = split_msg[:2]
         elif (len(split_msg) == 1 and split_msg[0] != ""):
             if (twitch_game_name == ""):
                 twitch_game_name = split_msg[0]
