@@ -77,14 +77,14 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         game_id = 0
         category = ""
         if (r["data"]):
+            stream_title = r["data"][0]["title"]
             game_id = r["data"][0]["game_id"]
             game_url = "{}/games?id={}".format(config.TWITCH_API, game_id)
             r = requests.get(game_url, headers=self.twitch_header).json()
             if (r["data"]):
                 game_name = r["data"][0]["name"]
-                stream_title = r["data"][0]["title"]
-                catgeory_match = category_re.match(stream_title)
-                if (catgeory_match):
+                category_match = self.category_re.match(stream_title)
+                if (category_match):
                     category = category_match.group(0)
         return game_name, game_id, category
 
@@ -123,7 +123,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         return cat_name, cat_id
 
     def get_pb(self, msg):
-        twitch_game_name, game_id = self.get_game_name_twitch()
+        twitch_game_name, game_id, category = self.get_game_name_twitch()
         split_msg = shlex.split(msg.rstrip('\r\n').lower())
         if (len(split_msg) > 2):
             username, category = split_msg[:2]
@@ -303,6 +303,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
 
     def chat(self, msg):
         self.connection.privmsg(self.channel, msg)
+        print(msg)
 
     def handle_exit_signal(self, signal, frame):
         print("Goodbye, cruel world...")
