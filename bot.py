@@ -157,15 +157,33 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         else:
             username = config.CHANNEL
 
+        if (twitch_game_name == ""):
+            self.chat("Couldn't find game name from category")
+            return
+
         game_name, game_id = self.get_game_name_srl(twitch_game_name)
         if (game_name == None):
             self.chat("Couldn't find \"{}\" on speedrun.com".format(twitch_game_name))
             return
 
-        cat_name, cat_id = self.get_category(category, game_id, stream_title)
+        cat_name, cat_id, defaulted = self.get_category(category, game_id, stream_title)
         if (cat_name == None):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
+        elif (defaulted and len(split_msg) == 2):
+            # check for game
+            twitch_game_name = category
+            game_name_2, game_id_2 = self.get_game_name_srl(twitch_game_name)
+            if (game_name_2 != None):
+                game_name = game_name_2
+                game_id = game_id_2
+                cat_name, cat_id, defaulted = self.get_category("", game_id, "")
+                if (cat_name == None):
+                    self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
+                    return
+            else:
+                self.chat("Couldn't find \"{}\" on speedrun.com".format(twitch_game_name))
+                return
 
         speedrun_url = "{}/users/{}/personal-bests?game={}".format(config.SRL_API, username, game_id)
         r = requests.get(speedrun_url).json()
@@ -210,7 +228,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         if (cat_name == None):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
-        elif (defaulted):
+        elif (defaulted and len(split_msg) == 1):
             # check for game
             twitch_game_name = category
             game_name_2, game_id_2 = self.get_game_name_srl(twitch_game_name)
