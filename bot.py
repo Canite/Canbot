@@ -170,7 +170,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         if (cat_name == None):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
-        elif (defaulted and len(split_msg) == 2):
+        elif (defaulted and len(split_msg) == 2 and category != None):
             # check for game
             twitch_game_name = category
             game_name_2, game_id_2 = self.get_game_name_srl(twitch_game_name)
@@ -228,7 +228,7 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         if (cat_name == None):
             self.chat("Couldn't find category containing \"{}\" for \"{}\"".format(category, game_name))
             return
-        elif (defaulted and len(split_msg) == 1):
+        elif (defaulted and len(split_msg) == 1 and category != None):
             # check for game
             twitch_game_name = category
             game_name_2, game_id_2 = self.get_game_name_srl(twitch_game_name)
