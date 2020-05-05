@@ -276,6 +276,8 @@ class TwitchBot(irc.bot.SingleServerIRCBot):
         for tag in e.tags:
             if (tag["key"] == "badges"):
                 badges = tag["value"]
+                if (badges == None):
+                    continue
                 broadcaster = badges.split(",")[0].split("/")[1]
                 mod = bool(broadcaster)
                 if (broadcaster):
